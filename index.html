@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Samoocena WOS – czat</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#0f172a; color:#e2e8f0; margin:0; }
+    .app { max-width: 760px; margin: 0 auto; min-height: 100dvh; display:flex; flex-direction:column; }
+    header { padding: 16px 20px; background:#111827; position:sticky; top:0; border-bottom:1px solid #1f2937;}
+    header h1 { font-size: 18px; margin: 0; }
+    .container { padding: 20px; display:flex; gap:12px; flex-direction:column; }
+    .bubble { padding:14px 16px; border-radius:16px; line-height:1.45; max-width: 90%; box-shadow: 0 6px 20px rgba(0,0,0,.15); }
+    .bot { align-self:flex-start; background:#1f2937; }
+    .me { align-self:flex-end; background:#2563eb; color:#fff; }
+    .choices { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    button.choice { border:1px solid #374151; background:#0b1020; color:#e2e8f0; padding:10px 12px; border-radius:12px; cursor:pointer; }
+    button.choice:hover { background:#111a34; }
+    .inputRow { display:flex; gap:8px; align-items:center; margin-top:8px;}
+    .inputRow input, .inputRow textarea, select { width:100%; padding:12px; border-radius:12px; border:1px solid #334155; background:#0b1020; color:#e2e8f0; }
+    .footer { padding: 16px 20px; border-top:1px solid #1f2937; background:#111827; position:sticky; bottom:0; }
+    .progress { font-size: 12px; color:#94a3b8; }
+    .small { font-size: 12px; color:#94a3b8; margin-top:6px;}
+    .hidden { display:none; }
+    .center { text-align:center; }
+    .ok { background:#16a34a; }
+    .warn { background:#f59e0b; }
+    .bad { background:#dc2626; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; font-weight:600; font-size:12px; }
+    a { color:#93c5fd; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Samoocena – WOS (tryb czatu)</h1>
+  </header>
+  <div class="container" id="chat">
+    <div class="bubble bot">Wybierz temat, a następnie odpowiadaj na pytania. Twoje odpowiedzi zapiszą się w arkuszu.</div>
+    <div class="bubble bot">
+      <label for="topic">Temat</label>
+      <div class="inputRow">
+        <select id="topic">
+          <option value="">— wybierz —</option>
+          <option>Człowiek – koncepcje i aspekty</option>
+          <option>Dobro wspólne</option>
+          <option>Społeczności i wspólnoty</option>
+          <option>Społeczeństwa i socjalizacja</option>
+          <option>Różnice społeczne</option>
+        </select>
+        <button class="choice" id="startBtn">Start</button>
+      </div>
+      <div class="small">Jeśli listy nie widać, upewnij się, że w arkuszu <b>Questions</b> są wpisane pytania dla tych tematów.</div>
+    </div>
+  </div>
+  <div class="footer">
+    <div class="progress" id="progress">Gotowy</div>
+  </div>
+</div>
+
+<script>
+  // ==== KONFIGURACJA ====
+  // Wstaw tutaj adres swojej aplikacji Apps Script (po wdrożeniu jako "Web app"):
+  const APP_URL = "https://script.google.com/macros/s/AKfycbzpvZp4XIYX4RWv_qWO4iIM_4XCoXxnkiFwsGERkaVP-yHVNXuqzWPWVYbSPlJn94ot/exec";
+  const SCALE = ["✅ Umiem wytłumaczyć i zastosować","🟡 Wiem częściowo, potrzebuję powtórki","🔴 Nie umiem / mam trudność"];
+
+  // ==== LOGIKA APLIKACJI ====
+  const chat = document.getElementById('chat');
+  const startBtn = document.getElementById('startBtn');
+  const topicEl = document.getElementById('topic');
+  const progressEl = document.getElementById('progress');
+
+  let state = {
+    topic: null,
+    items: [],
+    answers: {},
+    i: -1,
+    student: { name: "", class: "" }
+  };
+
+  function bubble(text, who="bot") {
+    const div = document.createElement('div');
+    div.className = `bubble ${who}`;
+    div.innerHTML = text;
+    chat.appendChild(div);
+    div.scrollIntoView({behavior:"smooth", block:"end"});
+    return div;
+  }
+
+  function choices(options, onPick) {
+    const wrap = document.createElement('div');
+    wrap.className = 'choices';
+    options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = 'choice';
+      btn.textContent = opt;
+      btn.addEventListener('click', () => onPick(opt));
+      wrap.appendChild(btn);
+    });
+    chat.appendChild(wrap);
+    wrap.scrollIntoView({behavior:"smooth", block:"end"});
+    return wrap;
+  }
+
+  function inputPrompt(label, multiline=false, placeholder="") {
+    const host = document.createElement('div');
+    host.className = 'bubble me';
+    const id = Math.random().toString(36).slice(2);
+    host.innerHTML = \`
+      <div>\${label}</div>
+      <div class="inputRow">
+        \${multiline ? '<textarea rows="3" id="'+id+'" placeholder="'+placeholder+'"></textarea>' : '<input id="'+id+'" placeholder="'+placeholder+'"/>'}
+        <button class="choice">OK</button>
+      </div>
+    \`;
+    chat.appendChild(host);
+    const input = host.querySelector('#'+CSS.escape(id));
+    const ok = host.querySelector('button.choice');
+    return { host, input, ok };
+  }
+
+  function setProgress(text) { progressEl.textContent = text; }
+
+  async function fetchQuestions(topic) {
+    setProgress('Pobieram pytania…');
+    const url = APP_URL + "?action=questions&topic=" + encodeURIComponent(topic);
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) throw new Error("Błąd pobierania pytań");
+    const data = await res.json();
+    return data;
+  }
+
+  function askNext() {
+    state.i++;
+    if (state.i >= state.items.length) {
+      askStudentMeta();
+      return;
+    }
+    const item = state.items[state.i];
+    bubble(item.text, "bot");
+    if (item.type === "choice") {
+      const wrap = choices(SCALE, (pick) => {
+        state.answers[item.id] = pick;
+        const me = bubble(pick, "me");
+        wrap.remove();
+        askNext();
+      });
+    } else { // text
+      const row = inputPrompt("Wpisz odpowiedź", true, "");
+      row.ok.addEventListener('click', () => {
+        const val = row.input.value.trim();
+        if (!val) { row.input.focus(); return; }
+        state.answers[item.id] = val;
+        askNext();
+      });
+    }
+    setProgress(\`Pytanie \${Math.min(state.i+1, state.items.length)} / \${state.items.length}\`);
+  }
+
+  function askStudentMeta() {
+    bubble("Dzięki! Jeszcze tylko dane do zapisu w arkuszu.", "bot");
+    const nameRow = inputPrompt("Twoje imię i nazwisko", false, "Jan Kowalski");
+    nameRow.ok.addEventListener('click', () => {
+      const v = nameRow.input.value.trim();
+      if (!v) return nameRow.input.focus();
+      state.student.name = v;
+      const clsRow = inputPrompt("Klasa (np. 1B)", false, "1B");
+      clsRow.ok.addEventListener('click', () => {
+        const c = clsRow.input.value.trim();
+        if (!c) return clsRow.input.focus();
+        state.student.class = c;
+        submitAll();
+      });
+    });
+  }
+
+  async function submitAll() {
+    setProgress("Zapisuję odpowiedzi…");
+    const payload = {
+      topic: state.topic,
+      student: state.student,
+      answers: state.answers
+    };
+    try {
+      const res = await fetch(APP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("Błąd sieci");
+      const data = await res.json();
+      bubble("Zapisano! Dziękuję za wypełnienie. ✅", "bot");
+      setProgress("Zapisano");
+    } catch (e) {
+      bubble("Nie udało się zapisać odpowiedzi. Sprawdź uprawnienia aplikacji i identyfikator arkusza.", "bot");
+      setProgress("Błąd zapisu");
+    }
+  }
+
+  startBtn.addEventListener('click', async () => {
+    const topic = topicEl.value;
+    if (!topic) { alert("Wybierz temat."); return; }
+    state.topic = topic;
+    bubble("Pobieram pytania…", "bot");
+    try {
+      const data = await fetchQuestions(topic);
+      state.items = data.items || [];
+      bubble("Gotowe. Zaczynajmy!", "bot");
+      askNext();
+    } catch (e) {
+      bubble("Nie udało się pobrać pytań. Upewnij się, że dodałeś je w arkuszu i że adres APP_URL jest poprawny.", "bot");
+    }
+  });
+</script>
+</body>
+</html>
